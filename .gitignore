@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Foundry & Hardhat
+cache/
+out/
+broadcast/
+artifacts/
+typechain/
+typechain-types/
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Build outputs
+dist/
+build/
+.next/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
