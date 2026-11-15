@@ -31,7 +31,7 @@ stateDiagram-v2
 
 ### B. Round Invariants
 1. **Quota Strictness:** A round transitions to `isFunded = true` if and only if `contributionsCount == maxMembers` (3).
-2. **Single Payout Guarantee:** `settleRound(circleId, roundIndex)` checks `round.isSettled == false` before changing state and transferring tokens. Subsequent calls revert with `RoundAlreadySettled()`.
+2. **Single Payout Guarantee:** `settleRound(circleId, roundIndex)` checks `round.isSettled` before state modification and transfer. If already settled, it idempotently returns `false` without re-transferring funds or advancing rounds.
 3. **Internal Solvency Calculation:** The payout sum is computed as `round.contributionTotal = maxMembers * contributionAmount`. No arbitrary balance or recipient can be injected through external calldata.
 
 ---

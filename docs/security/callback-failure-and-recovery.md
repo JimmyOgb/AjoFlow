@@ -18,51 +18,76 @@ AjoSettlementReactive                           AjoSettlementReceiver
    - Contract: `AjoSettlementReactive`
    - Currency: Native REACT tokens.
    - Mechanism: Charged by the Lasna `SYSTEM` contract for `react()` execution and subscription management.
-   - Funding Method: Direct transfer of REACT to `AjoSettlementReactive` (via `receive() external payable`).
+   - Funding Method: Direct transfer of REACT to `AjoSettlementReactive`.
 
 2. **Base Sepolia Destination Side:**
    - Contract: `AjoSettlementReceiver`
    - Currency: Native Base Sepolia ETH.
    - Mechanism: Charged by the Callback Proxy (`0x476F44b11F5C942c58f4c8E3d0300E5710743585`) for delivering cross-chain callbacks.
-   - Funding Method: Direct transfer of ETH to `AjoSettlementReceiver` (via `receive() external payable`).
+   - Funding Method: Direct transfer of ETH to `AjoSettlementReceiver`.
 
 ---
 
-## 2. Debt Rules & Proactive Monitoring
+## 2. Debt Rules & Automatic Clearance
 
 > [!WARNING]
-> **Any Debt Blocks Execution:** Under Reactive Omni's `AbstractPayer` logic, if `_SERVICE_PROVIDER.debt(address(this)) > 0`, the callback proxy drops callbacks until all outstanding debt is paid.
+> **Source Library Discovery:** In the official Reactive Omni library (`lib/reactive-lib-omni/src/base/AbstractPayer.sol`), `receive() virtual external payable {}` has an empty body. Merely receiving funds raises `address(this).balance` but does **not** automatically pay outstanding debt to `_SERVICE_PROVIDER`.
 
-### Monitoring Invariants
-- Both contracts expose `_SERVICE_PROVIDER.debt(address(this))` through standard JSON-RPC view calls.
-- The AjoFlow deployment scripts and frontend verify that:
-  - `AjoSettlementReactive.balance >= 0.05 REACT`
-  - `AjoSettlementReceiver.balance >= 0.01 Base Sepolia ETH`
-  - Outstanding debt == 0.
+### The AjoFlow Debt Settlement Enhancement
+To ensure that funds sent to the contract immediately resolve outstanding debt, both `AjoSettlementReceiver` and `AjoSettlementReactive` implement:
 
-### Who Can Add Funds?
-- **Permissionless Funding:** Both `AjoSettlementReactive` and `AjoSettlementReceiver` inherit `receive() external payable`. Anyone (deployer, circle members, or automated sponsor bot) can top up gas reserves at any time without special permissions.
-
----
-
-## 3. Failure Modes & Recovery Matrix
-
-| Failure Mode | Impact | Immediate Behavior | Recovery Procedure |
-| :--- | :--- | :--- | :--- |
-| **Exhausted Receiver ETH** | Callback cannot be executed by Callback Proxy | Proxy records debt; callback reverts or pauses | Anyone sends ETH to `AjoSettlementReceiver`. Contract invokes `_coverDebt()`. |
-| **Callback Gas Exhaustion** | Transaction runs out of gas during callback execution | Callback Proxy records failure; round remains in `isFunded == true`, `isSettled == false` | A permissionless retry function or updated gas limit can be invoked to retry callback. |
-| **Exhausted Reactive REACT** | Lasna fails to invoke `react()` | System contract halts subscription triggers | Deployer or community sends REACT to `AjoSettlementReactive`. |
-| **Temporary Network Outage** | Relayer latency between Lasna and Base Sepolia | Payout delayed until cross-chain relay catches up | Event is persisted on Base Sepolia. Once network recovers, Reactive relayer processes log. |
+1. **Automatic Debt Clearance on Receive:**
+   ```solidity
+   receive() external payable override {
+       _coverDebt();
+   }
+   ```
+2. **Explicit Public Debt Clearance:**
+   ```solidity
+   function coverDebt() external {
+       _coverDebt();
+   }
+   ```
+This guarantees that whenever anyone sends native ETH or REACT to the contracts, `_SERVICE_PROVIDER.debt(address(this))` is checked and paid immediately via low-level value transfer to the service provider. Furthermore, anyone can invoke `coverDebt()` at any time to clear accrued debt from existing contract balances.
 
 ---
 
-## 4. Idempotency & Double-Payout Prevention
+## 3. Duplicate Callback Handling & Gas Conservation
 
-In any retry scenario:
-- `AjoCircleManager.settleRound` performs a strict check:
-  ```solidity
-  if (!round.isFunded) revert RoundNotFunded();
-  if (round.isSettled) revert RoundAlreadySettled();
-  ```
-- Because `round.isSettled` is set to `true` inside the same atomic execution as the `safeTransfer`, a retried callback will safely revert without transferring any duplicate funds.
-- User balances are never redirectable. The protocol does not include administrative withdrawal or emergency redirection functions.
+### The Problem with Reverting on Duplicate Settlement
+Previously, attempting to settle an already-settled round reverted with `RoundAlreadySettled()`. If a duplicate or retried callback was delivered by the Callback Proxy:
+- The transaction reverted on Base Sepolia.
+- Full gas was consumed up to the revert point.
+- The Callback Proxy recorded a failed execution and still charged `AjoSettlementReceiver` for gas, unnecessarily depleting reserves.
+
+### The Corrected Idempotency Pattern
+In the updated implementation:
+```solidity
+Round storage round = _rounds[circleId][roundIndex];
+// Safe idempotent return: If round has already been settled, return false without re-transferring funds
+if (round.isSettled) {
+    return false;
+}
+```
+And in `AjoSettlementReceiver.executeSettlement`:
+```solidity
+bool settled = circleManager.settleRound(circleId, roundIndex);
+if (settled) {
+    emit SettlementTriggered(circleId, roundIndex, reactiveSender);
+}
+```
+**Benefits:**
+1. **Zero Double-Payout Risk:** Funds cannot be transferred again because `round.isSettled` is already `true`.
+2. **Gas Efficiency:** The duplicate callback exits cleanly in ~30,000 gas rather than reverting, preventing unnecessary proxy penalties.
+3. **Authorization Preserved:** `onlyServiceProvider` and `onlyCallbackSender` are still strictly enforced prior to executing the call.
+
+---
+
+## 4. Failure Modes & Recovery Matrix
+
+| Failure Mode | Immediate Behavior | Recovery Procedure |
+| :--- | :--- | :--- |
+| **Exhausted Receiver ETH** | Callback Proxy records debt; subsequent callbacks halt | Anyone sends ETH to `AjoSettlementReceiver`. The overridden `receive()` immediately triggers `_coverDebt()`. |
+| **Callback Gas Exhaustion** | Transaction runs out of gas during callback execution | Round remains in `isFunded == true`, `isSettled == false`. Relayer or permissionless retry triggers settlement with sufficient gas. |
+| **Exhausted Reactive REACT** | Lasna halts subscription triggers | Deployer or community sends REACT to `AjoSettlementReactive`. The overridden `receive()` triggers `_coverDebt()`. |
+| **Temporary Network Outage** | Payout delayed until cross-chain relay catches up | Events are immutable on Base Sepolia. Once network resumes, the Reactive relayer processes the log. |

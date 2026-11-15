@@ -2,7 +2,8 @@
 pragma solidity 0.8.29;
 
 import { ISystemContract } from "../../lib/reactive-lib-omni/src/interfaces/ISystemContract.sol";
-import { IReactive } from "../../lib/reactive-lib-omni/src/interfaces/IReactive.sol";
+import { IPayer } from "../../lib/reactive-lib-omni/src/interfaces/IPayer.sol";
+import { AbstractPayer } from "../../lib/reactive-lib-omni/src/base/AbstractPayer.sol";
 import { AbstractReactive } from "../../lib/reactive-lib-omni/src/base/AbstractReactive.sol";
 import { IAjoSettlementReceiver } from "../../contracts/src/interfaces/IAjoSettlementReceiver.sol";
 
@@ -95,5 +96,19 @@ contract AjoSettlementReactive is AbstractReactive {
         );
 
         emit CallbackRequested(circleId, roundIndex, recipient, totalAmount);
+    }
+
+    /**
+     * @notice Allows anyone to trigger debt clearance to the system contract.
+     */
+    function coverDebt() external {
+        _coverDebt();
+    }
+
+    /**
+     * @notice Receives native funds and automatically settles any outstanding debt with the system contract.
+     */
+    receive() external payable override(AbstractPayer, IPayer) {
+        _coverDebt();
     }
 }

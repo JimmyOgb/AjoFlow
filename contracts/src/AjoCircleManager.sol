@@ -143,15 +143,22 @@ contract AjoCircleManager is IAjoCircleManager, ReentrancyGuard {
         }
     }
 
-    function settleRound(uint256 circleId, uint256 roundIndex) external override onlySettlementReceiver nonReentrant {
+    function settleRound(
+        uint256 circleId,
+        uint256 roundIndex
+    ) external override onlySettlementReceiver nonReentrant returns (bool) {
         Circle storage circle = _circles[circleId];
         if (circle.circleId == 0) revert CircleDoesNotExist();
-        if (circle.state != CircleState.Active) revert CircleNotActive();
-        if (roundIndex != circle.currentRound) revert InvalidRound();
+        if (circle.state != CircleState.Active && circle.state != CircleState.Completed) revert CircleNotActive();
 
         Round storage round = _rounds[circleId][roundIndex];
+        // Safe idempotent return: If round has already been settled, return false without re-transferring funds
+        if (round.isSettled) {
+            return false;
+        }
+
+        if (roundIndex != circle.currentRound) revert InvalidRound();
         if (!round.isFunded) revert RoundNotFunded();
-        if (round.isSettled) revert RoundAlreadySettled();
 
         round.isSettled = true;
         uint256 payoutAmount = round.contributionTotal;
@@ -166,6 +173,7 @@ contract AjoCircleManager is IAjoCircleManager, ReentrancyGuard {
         usdc.safeTransfer(recipient, payoutAmount);
 
         emit RoundSettled(circleId, roundIndex, recipient, payoutAmount);
+        return true;
     }
 
     function getCircle(uint256 circleId) external view override returns (Circle memory) {

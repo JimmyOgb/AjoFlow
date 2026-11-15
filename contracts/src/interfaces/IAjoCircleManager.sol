@@ -41,7 +41,7 @@ interface IAjoCircleManager is IAjoEvents {
 
     function contribute(uint256 circleId, uint256 roundIndex) external;
 
-    function settleRound(uint256 circleId, uint256 roundIndex) external;
+    function settleRound(uint256 circleId, uint256 roundIndex) external returns (bool);
 
     function getCircle(uint256 circleId) external view returns (Circle memory);
 

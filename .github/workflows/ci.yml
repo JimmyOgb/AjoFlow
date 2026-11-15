@@ -17,11 +17,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Verify repository structure
-        run: |
-          test -d contracts
-          test -d reactive
-          test -d frontend
-          test -d docs
-          echo "Repository directory structure validated successfully."
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile Base Sepolia contracts
+        run: npx hardhat compile
+
+      - name: Compile Reactive Lasna contract
+        run: npx hardhat compile --config hardhat.reactive.config.js
+
+      - name: Run Solhint static analysis
+        run: npm run lint:sol
+
+      - name: Check code formatting with Prettier
+        run: npm run format:check

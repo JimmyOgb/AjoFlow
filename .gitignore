@@ -5,9 +5,11 @@ node_modules/
 
 # Foundry & Hardhat
 cache/
+cache-reactive/
 out/
 broadcast/
 artifacts/
+artifacts-reactive/
 typechain/
 typechain-types/
 

@@ -2,6 +2,7 @@
 pragma solidity 0.8.29;
 
 import { IPayable } from "../../lib/reactive-lib-omni/src/interfaces/IPayable.sol";
+import { AbstractPayer } from "../../lib/reactive-lib-omni/src/base/AbstractPayer.sol";
 import { AbstractCallback } from "../../lib/reactive-lib-omni/src/base/AbstractCallback.sol";
 import { IAjoSettlementReceiver } from "./interfaces/IAjoSettlementReceiver.sol";
 import { IAjoCircleManager } from "./interfaces/IAjoCircleManager.sol";
@@ -34,7 +35,23 @@ contract AjoSettlementReceiver is AbstractCallback, IAjoSettlementReceiver {
         uint256 circleId,
         uint256 roundIndex
     ) external override onlyServiceProvider onlyCallbackSender(reactiveSender) {
-        emit SettlementTriggered(circleId, roundIndex, reactiveSender);
-        circleManager.settleRound(circleId, roundIndex);
+        bool settled = circleManager.settleRound(circleId, roundIndex);
+        if (settled) {
+            emit SettlementTriggered(circleId, roundIndex, reactiveSender);
+        }
+    }
+
+    /**
+     * @notice Allows anyone to trigger debt clearance to the callback proxy.
+     */
+    function coverDebt() external {
+        _coverDebt();
+    }
+
+    /**
+     * @notice Receives funds and automatically settles any outstanding debt with the callback proxy.
+     */
+    receive() external payable override(AbstractPayer) {
+        _coverDebt();
     }
 }
