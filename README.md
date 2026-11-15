@@ -40,40 +40,42 @@ With **Reactive Omni**:
 
 ---
 
-## 4. Architecture & Event-to-Callback Workflow
+## 4. Architecture & Three-Contract Separation
+
+AjoFlow strictly enforces a three-contract decoupled architecture to adhere to Reactive Omni inheritance rules:
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Member as Circle Member
-    participant Vault as AjoFlowPool (Base Sepolia)
-    participant Proxy as Callback Proxy (Base Sepolia)
-    participant System as SYSTEM Contract (Lasna)
-    participant Reactive as AjoFlowReactive (Lasna)
+flowchart TD
+    subgraph BaseSepolia["Base Sepolia (Settlement Layer - Chain ID: 84532)"]
+        Manager["AjoCircleManager.sol<br/>• Circle state & membership<br/>• SafeERC20 USDC transfers<br/>• Sole source of truth for payouts"]
+        Receiver["AjoSettlementReceiver.sol<br/>• Inherits AbstractCallback<br/>• Authorized Callback Proxy<br/>• onlyCallbackSender(reactive)"]
+        Proxy["Reactive Callback Proxy<br/>0x476F44b11F5C942c58f4c8E3d0300E5710743585"]
+        USDC["Circle USDC<br/>0x036CbD53842c5426634e7929541eC2318f3dCF7e"]
+    end
 
-    Member->>Vault: deposit(circleId, roundIndex) with USDC
-    Vault-->>System: Log Emitted: ContributionReceived
-    System->>Reactive: react(LogRecord)
-    Note over Reactive: Evaluates round completion threshold
-    Reactive->>System: requestCallbackV_1_0(executePayout)
-    System->>Proxy: Forward Callback Execution
-    Proxy->>Vault: executePayout(reactiveSender, circleId, recipient)
-    Note over Vault: Validates onlyServiceProvider & onlyCallbackSender
-    Vault->>Member: Disburses total round USDC pool to scheduled recipient
+    subgraph ReactiveLasna["Reactive Lasna (Orchestration Layer - Chain ID: 5318007)"]
+        System["SYSTEM Contract<br/>0x8888888888888888888888888888888888888888"]
+        Reactive["AjoSettlementReactive.sol<br/>• Inherits AbstractReactive<br/>• Subscribes to RoundFunded<br/>• requestCallbackV_1_0()"]
+    end
+
+    Manager -- "Emits RoundFunded" --> System
+    System -- "react(LogRecord)" --> Reactive
+    Reactive -- "requestCallbackV_1_0()" --> System
+    System -. "Relayed Execution" .-> Proxy
+    Proxy -- "executeSettlement()" --> Receiver
+    Receiver -- "settleRound()" --> Manager
+    Manager -- "safeTransfer(recipient, totalPayout)" --> USDC
 ```
 
----
-
-## 5. Contract Responsibilities
-
-| Contract | Network | Compiler | Role & Key Responsibilities |
+| Contract | Network | Base Class | Responsibilities |
 | :--- | :--- | :--- | :--- |
-| **`AjoFlowPool.sol`** | Base Sepolia (`84532`) | Solidity `0.8.29` | **Settlement Vault & Callback Consumer.** Inherits `AbstractCallback`. Manages USDC deposits, validates member participation, enforces `onlyServiceProvider` and `onlyCallbackSender`, and distributes round payouts. |
-| **`AjoFlowReactive.sol`** | Reactive Lasna (`5318007`) | Solidity `0.8.29` | **Autonomous Orchestrator.** Inherits `AbstractReactive`. Subscribes to Base Sepolia deposit events, computes rotation schedules, and invokes `SYSTEM.requestCallbackV_1_0()`. |
+| **`AjoCircleManager.sol`** | Base Sepolia (`84532`) | `ReentrancyGuard` | Canonical circle accounting, SafeERC20 transfers, payout recipient calculation. Zero cross-chain dependencies. |
+| **`AjoSettlementReceiver.sol`** | Base Sepolia (`84532`) | `AbstractCallback` | Authenticated receiver for Reactive Callback Proxy (`0x476F44b1...`). Forwards settlement signals to manager. |
+| **`AjoSettlementReactive.sol`** | Reactive Lasna (`5318007`) | `AbstractReactive` | Event subscriber for `RoundFunded` logs. Issues `requestCallbackV_1_0()` with `address(0)` placeholder. |
 
 ---
 
-## 6. Verified Network Configuration
+## 5. Verified Network Configuration
 
 All live network RPC endpoints and contracts were inspected and verified via read-only RPC calls during Phase 1 reconnaissance.
 
@@ -90,81 +92,87 @@ All live network RPC endpoints and contracts were inspected and verified via rea
 
 ---
 
-## 7. Frontend User Interface Design
+## 6. Frontend User Interface Design
 
 The frontend user interface follows the production reference design documented in [`docs/architecture/ui-reference.png`](docs/architecture/ui-reference.png):
-- **Circle Discovery & My Groups:** High-level summary of active circles, contribution progress bars (e.g. 4 of 6 paid), and upcoming deadlines.
-- **Cycle Details Dashboard:** Balance display, dynamic round progress stepper (rounds 1 through 8), and draw schedules.
+- **Circle Discovery & My Groups:** High-level summary of active circles, contribution progress bars (e.g. 2 of 3 paid), and upcoming deadlines.
+- **Cycle Details Dashboard:** Balance display, dynamic round progress stepper (rounds 1 through 3), and draw schedules.
 - **Member Transparency View:** Granular member status indicators (*Paid*, *Late*, *Pending*).
 
 ---
 
-## 8. Technology Stack
+## 7. Technology Stack & Pinned Dependencies
 
+- **Primary Toolchain:** Hardhat 3.22 (ESM) + Solc `0.8.29`
 - **Smart Contracts:** Solidity `^0.8.29`
-- **Reactive Library:** Reactive Omni (`@reactive-network/reactive-lib-omni`)
-- **Build & Test Tools:** Foundry / Hardhat & Node.js
-- **Settlement Token:** Official Circle USDC (EIP-3009 / ERC-20, 6 decimals)
-- **Frontend:** Next.js / Tailwind CSS / Viem & Wagmi
+- **Reactive Library:** Reactive Omni (`reactive-lib-omni` pinned to commit `3ade0dcf1d27e67e5783ef807e73a1b9e0c0cce8` / tag `v0.1.0`)
+- **Token Security:** OpenZeppelin Contracts `^5.6.1` (`SafeERC20`, `IERC20`, `ReentrancyGuard`)
+- **Linting & Formatting:** Solhint `^6.2.5`, Prettier `^3.10.1` (`prettier-plugin-solidity`)
+- **Settlement Token:** Official Circle USDC (6 decimals)
 
 ---
 
-## 9. Setup Instructions
+## 8. Setup & Compilation
 
 ```bash
 # Clone the repository
 git clone https://github.com/JimmyOgb/AjoFlow.git
 cd AjoFlow
 
-# Inspect project foundation
-ls -la
+# Install pinned dependencies
+npm install
 
-# Copy environment variables template
-cp .env.example .env
+# Compile contracts
+npx hardhat compile
+
+# Run static analysis
+npx solhint "contracts/src/**/*.sol"
+
+# Check code formatting
+npx prettier --check "contracts/src/**/*.sol" "reactive/src/**/*.sol"
 ```
 
 ---
 
-## 10. Environment Variable Reference
+## 9. Callback Funding & Debt Model
 
-See [`.env.example`](.env.example) for the full configuration reference:
-- `BASE_SEPOLIA_RPC`: Base Sepolia RPC URL
-- `LASNA_RPC`: Reactive Lasna RPC URL
-- `BASE_SEPOLIA_USDC`: Official Circle USDC address (`0x036CbD53842c5426634e7929541eC2318f3dCF7e`)
-- `BASE_SEPOLIA_CALLBACK_PROXY`: Callback proxy (`0x476F44b11F5C942c58f4c8E3d0300E5710743585`)
-- `LASNA_SYSTEM_CONTRACT`: System contract (`0x8888888888888888888888888888888888888888`)
+- **Lasna Reserves:** `AjoSettlementReactive` must maintain native REACT balance to pay `SYSTEM` for `react()` execution.
+- **Base Sepolia Reserves:** `AjoSettlementReceiver` must maintain Base Sepolia ETH balance to pay the Callback Proxy for cross-chain execution.
+- **Any Debt Halts Callbacks:** Both contracts feature permissionless `receive() external payable` functions to allow anyone to top up gas reserves and clear any outstanding debt.
+- **Idempotent Retries:** Duplicate or retried callbacks cannot result in duplicate payouts; the manager enforces atomic state changes prior to token disbursement.
 
 ---
 
-## 11. Security Model & Economic Rules
+## 10. Actual Implementation Status
 
-- **Strict Access Control:** Callbacks can only be initiated by the designated Reactive Contract via the verified Callback Proxy.
-- **Debt Prohibition:** Under Reactive Omni, contracts with positive debt are halted by the system contract. Both contracts maintain autonomous gas reserves to immediately settle execution charges.
-- **Address Injection Invariant:** Callbacks format payloads with `address(0)` in the first position to ensure cryptographic injection of the authenticated reactive sender.
-
----
-
-## 12. Actual Implementation Status
+> [!IMPORTANT]
+> **Contracts are NOT deployed yet.** All contract addresses and transaction hashes remain strictly **PENDING** until live deployment receipts are verified on-chain in Phase 3.
 
 - [x] **Phase 1: Repository Creation, Technical Reconnaissance and Foundation** (Completed)
   - [x] Public repository created under authenticated account (`JimmyOgb/AjoFlow`)
   - [x] Live read-only RPC reconnaissance on Base Sepolia and Reactive Lasna
   - [x] Circle USDC and System Contract bytecode confirmed
   - [x] Architectural documentation and security specifications completed
-- [ ] **Phase 2: Contract Implementation & Local/Testnet Testing** (Pending Phase 1 Review)
-- [ ] **Phase 3: Live Testnet Deployment & Event Feedback Loop Execution** (Pending Phase 2)
+- [x] **Phase 2: Technical Design, Dependency Setup & Verification** (Completed)
+  - [x] Official Reactive Omni library pinned to commit `3ade0dcf1d27e67e5783ef807e73a1b9e0c0cce8` (v0.1.0)
+  - [x] Hardhat toolchain with Solc `0.8.29` verified and compiling
+  - [x] Three-contract architecture specified and compilation-verified
+  - [x] Static analysis (Solhint) and code formatting (Prettier) verified
+  - [x] Granular 3-tier testing strategy and frontend integration contracts defined
+- [ ] **Phase 3: Contract Implementation & Live Testnet Verification** (Pending Phase 2 Approval)
 - [ ] **Phase 4: Frontend Integration, Video Demonstration & Final Submission** (Pending Phase 3)
 
 ### Verified Addresses and Hashes Status:
-- `AjoFlowPool` (Base Sepolia): `PENDING`
-- `AjoFlowReactive` (Reactive Lasna): `PENDING`
+- `AjoCircleManager` (Base Sepolia): `PENDING`
+- `AjoSettlementReceiver` (Base Sepolia): `PENDING`
+- `AjoSettlementReactive` (Reactive Lasna): `PENDING`
 - Origin Deposit Transaction Hash: `PENDING`
 - Lasna Reaction Transaction Hash: `PENDING`
 - Callback Execution Transaction Hash: `PENDING`
 
 ---
 
-## 13. Three-Minute Demo Plan
+## 11. Three-Minute Demo Plan
 
 1. **Minute 0:00 - 0:45 (Problem & Architecture):** Explain the vulnerability of traditional ROSCAs and present the AjoFlow architecture showing how Reactive Omni automates savings circles.
 2. **Minute 0:45 - 1:45 (Live Interaction & Deposit):** Connect wallet on Base Sepolia, display the group dashboard, and deposit USDC for the current round.
@@ -173,6 +181,6 @@ See [`.env.example`](.env.example) for the full configuration reference:
 
 ---
 
-## 14. License
+## 12. License
 
 Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
